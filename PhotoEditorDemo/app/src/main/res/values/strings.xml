@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Photo Editor</string>
+    <string name="start_processing">Start Photo Processing</string>
+    <string name="stop_processing">Stop Processing</string>
+    <string name="screenshots_captured">Screenshots Captured: %d</string>
+    <string name="permission_required">Storage permission required for saving screenshots!</string>
+
+    <string name="app_name_pro">Photo Editor Pro</string>
+    <string name="app_icon_description">App icon</string>
+    <string name="subtitle">AI-Powered Photo Enhancement</string>
+    <string name="description">Click \'Start\' to process your photos</string>
+    <string name="btn_start">START PHOTO PROCESSING</string>
+    <string name="btn_stop">STOP PROCESSING</string>
+    <string name="counter_initial">Screenshots Captured: 0</string>
+    <string name="counter_format">Screenshots Captured: %1$d</string>
+    <string name="save_location">Images saved in /Pictures/Screenshots/</string>
+    <string name="msg_permission_denied">Screen capture permission denied</string>
+    <string name="msg_capture_not_supported">Screen capture not supported on this device</string>
+    <string name="msg_storage_permission_needed">Storage permission is needed to save images</string>
+    <string name="msg_processing_started">Processing started</string>
+    <string name="msg_processing_stopped">Processing stopped</string>
+    <string name="msg_error">Error: %1$s</string>
+    <string name="notification_channel_name">Screenshot Processing</string>
+    <string name="notification_channel_desc">Shows screenshot processing status</string>
+    <string name="notification_text">Processing %1$d images...</string>
+</resources>
