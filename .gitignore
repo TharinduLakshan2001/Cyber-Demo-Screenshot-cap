@@ -10,3 +10,5 @@ captures/
 finished app/
 *.apk
 *.aab
+__pycache__/
+received_screenshots/
